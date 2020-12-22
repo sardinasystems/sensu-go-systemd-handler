@@ -28,7 +28,7 @@ import (
 	"strings"
 
 	"github.com/coreos/go-systemd/v22/dbus"
-	dbusRaw "github.com/godbus/dbus"
+	dbusRaw "github.com/godbus/dbus/v5"
 	"github.com/pkg/errors"
 )
 
@@ -37,15 +37,15 @@ type UnitFetcher func(conn *dbus.Conn, states, patterns []string) ([]dbus.UnitSt
 // InstrospectForUnitMethods determines what methods are available via dbus for listing systemd units.
 // We have a number of functions, some better than others, for getting and filtering unit lists.
 // This will attempt to find the most optimal method, and move down to methods that require more work.
-func InstrospectForUnitMethods() (UnitFetcher, error) {
+func InstrospectForUnitMethods(conn *dbusRaw.Conn) (UnitFetcher, error) {
 	//setup a dbus connection
-	conn, err := dbusRaw.SystemBusPrivate()
-	if err != nil {
-		return nil, errors.Wrap(err, "error getting connection to system bus")
-	}
+	//conn, err := dbusRaw.SystemBusPrivate()
+	//if err != nil {
+	//	return nil, errors.Wrap(err, "error getting connection to system bus")
+	//}
 
 	auth := dbusRaw.AuthExternal(strconv.Itoa(os.Getuid()))
-	err = conn.Auth([]dbusRaw.Auth{auth})
+	err := conn.Auth([]dbusRaw.Auth{auth})
 	if err != nil {
 		return nil, errors.Wrap(err, "error authenticating")
 	}

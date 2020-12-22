@@ -58,15 +58,18 @@ func NewDBusTunnel(ctx context.Context, tunnelConfig sshtunnel.Config, remoteSoc
 func (t *DBusTunnel) New() (*systemdDBus.Conn, error) {
 	return systemdDBus.NewConnection(
 		func() (*dbus.Conn, error) {
-			return dbusAuthConnection(t.ctx, func(opts ...dbus.ConnOption) (*dbus.Conn, error) {
-				host, port, err := net.SplitHostPort(t.laddr.String())
-				if err != nil {
-					return nil, fmt.Errorf("split laddr error: %w", err)
-				}
-
-				return dbus.Dial(fmt.Sprintf("tcp:host=%s,port=%s", host, port), opts...)
-			})
+			return dbusAuthConnection(t.ctx, t.NewDBusConn)
 		})
+}
+
+// NewDBusConn makes raw d-bus connection to the remote systemd
+func (t *DBusTunnel) NewDBusConn(opts ...dbus.ConnOption) (*dbus.Conn, error) {
+	host, port, err := net.SplitHostPort(t.laddr.String())
+	if err != nil {
+		return nil, fmt.Errorf("split laddr error: %w", err)
+	}
+
+	return dbus.Dial(fmt.Sprintf("tcp:host=%s,port=%s", host, port), opts...)
 }
 
 // copy from systemd/v22/dbus

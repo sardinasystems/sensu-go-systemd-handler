@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/coreos/go-systemd/v22/dbus"
 	"github.com/sensu-community/sensu-plugin-sdk/sensu"
 	"github.com/sensu/sensu-go/types"
+	"go.uber.org/multierr"
 
 	"github.com/sgreben/sshtunnel/backoff"
 	sshtunnel "github.com/sgreben/sshtunnel/exec"
@@ -20,7 +23,9 @@ import (
 type Config struct {
 	sensu.PluginConfig
 	UnitPatterns []string
+	MatchUnits   bool
 	Action       string
+	Mode         string
 	SSHHost      string
 	SSHUser      string
 	SSHPort      int
@@ -45,8 +50,16 @@ var (
 			Env:       "SYSTEMD_UNIT",
 			Argument:  "unit",
 			Shorthand: "s",
-			Usage:     "Systemd unit(s) pattern to action",
+			Usage:     "Systemd unit(s) names/patterns to action",
 			Value:     &plugin.UnitPatterns,
+		},
+		{
+			Path:      "match",
+			Env:       "SYSTEMD_MATCH_UNITS",
+			Argument:  "match",
+			Shorthand: "m",
+			Usage:     "Match unit(s) patterns",
+			Value:     &plugin.MatchUnits,
 		},
 		{
 			Path:      "action",
@@ -56,6 +69,15 @@ var (
 			Usage:     "Action to perform: start, stop, restart, reload",
 			Value:     &plugin.Action,
 			Default:   "restart",
+		},
+		{
+			Path:      "mode",
+			Env:       "SYSTEMD_MODE",
+			Argument:  "mode",
+			Shorthand: "M",
+			Usage:     "Action mode: replace, fail, isolate, ignore-dependencies, ignore-requirements",
+			Value:     &plugin.Mode,
+			Default:   "replace",
 		},
 		{
 			Path:      "ssh_host",
@@ -127,8 +149,39 @@ func stringsContains(sl []string, s string) bool {
 	return false
 }
 
+type actionFunc func(name string, mode string, ch chan<- string) (int, error)
+
+func getActionFunc(conn *dbus.Conn) (actionFunc, error) {
+	switch plugin.Action {
+	case "start":
+		return conn.StartUnit, nil
+
+	case "stop":
+		return conn.StopUnit, nil
+
+	case "restart":
+		return conn.RestartUnit, nil
+
+	case "reload":
+		return conn.ReloadUnit, nil
+
+	case "try-restart":
+		return conn.TryRestartUnit, nil
+
+	case "reload-or-restart":
+		return conn.ReloadOrRestartUnit, nil
+
+	case "reload-or-try-restart":
+		return conn.ReloadOrTryRestartUnit, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported action: %s", plugin.Action)
+	}
+}
+
 func checkArgs(_ *types.Event) error {
-	allowedActions := []string{"start", "stop", "restart", "reload"}
+	allowedActions := []string{"start", "stop", "restart", "reload", "try-restart", "reload-or-restart", "reload-or-try-restart"}
+	allowedModes := []string{"replace", "fail", "isolate", "ignore-dependencies", "ignore-requirements"}
 	var err error
 
 	if len(plugin.UnitPatterns) == 0 {
@@ -136,6 +189,9 @@ func checkArgs(_ *types.Event) error {
 	}
 	if !stringsContains(allowedActions, plugin.Action) {
 		return fmt.Errorf("--action must be one of %v, but it is: %v", allowedActions, plugin.Action)
+	}
+	if !stringsContains(allowedModes, plugin.Mode) {
+		return fmt.Errorf("--mode must be one of %v, but it is: %v", allowedModes, plugin.Mode)
 	}
 
 	plugin.Backoff.Min, err = time.ParseDuration(plugin.BackoffMin)
@@ -162,9 +218,10 @@ func executeHandler(event *types.Event) error {
 		tunnelConfig.SSHHost = event.Entity.System.Hostname
 	}
 
-	log.Printf("Connecting ssh tunnel to: %s:%s", tunnelConfig.SSHHost, tunnelConfig.SSHPort)
+	ctx := context.Background()
 
-	stun, err := service.NewDBusTunnel(context.Background(), tunnelConfig, plugin.DBusSocket)
+	log.Printf("Connecting ssh tunnel to: %s:%s", tunnelConfig.SSHHost, tunnelConfig.SSHPort)
+	stun, err := service.NewDBusTunnel(ctx, tunnelConfig, plugin.DBusSocket)
 	if err != nil {
 		return fmt.Errorf("SSH Tunnel error: %w", err)
 	}
@@ -175,7 +232,67 @@ func executeHandler(event *types.Event) error {
 		return fmt.Errorf("D-BUS error: %w", err)
 	}
 
-	_ = conn
+	unitNames := make([]string, 0)
 
-	return nil
+	if plugin.MatchUnits {
+		log.Printf("Matching units...")
+
+		rawConn, err := stun.NewDBusConn()
+		if err != nil {
+			return fmt.Errorf("failed to make raw d-bus connection: %w", err)
+		}
+
+		unitFetcher, err := service.InstrospectForUnitMethods(rawConn)
+		if err != nil {
+			return fmt.Errorf("could not introspect systemd dbus: %w", err)
+		}
+
+		unitStats, err := unitFetcher(conn, nil, plugin.UnitPatterns)
+		if err != nil {
+			return fmt.Errorf("list units error: %w", err)
+		}
+
+		for _, unit := range unitStats {
+			unitNames = append(unitNames, unit.Name)
+		}
+	} else {
+		log.Panicf("Use units as-is")
+	}
+
+	var wg sync.WaitGroup
+	errors := make(chan error, len(unitNames))
+	for idx, unitName := range unitNames {
+		log.Printf("%s: Triggering %s action (%d/%d)", unitName, plugin.Action, idx, len(unitNames))
+		wg.Add(1)
+		go func(unitName string) {
+			defer wg.Done()
+
+			af, err2 := getActionFunc(conn)
+			if err2 != nil {
+				errors <- err2
+			}
+
+			resultCh := make(chan string)
+
+			_, err2 = af(unitName, plugin.Mode, resultCh)
+			if err2 != nil {
+				log.Printf("%s: Action error: %v", unitName, err2)
+				errors <- err2
+			}
+
+			result := <-resultCh
+			close(resultCh)
+
+			log.Printf("%s: result: %s", unitName, result)
+		}(unitName)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	for err2 := range errors {
+		err = multierr.Append(err, err2)
+	}
+
+	return err
 }
