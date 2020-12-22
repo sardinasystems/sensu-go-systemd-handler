@@ -235,7 +235,7 @@ func executeHandler(event *types.Event) error {
 	unitNames := make([]string, 0)
 
 	if plugin.MatchUnits {
-		log.Printf("Matching units...")
+		log.Printf("Matching unit patterns...")
 
 		rawConn, err := stun.NewDBusConn()
 		if err != nil {
@@ -256,7 +256,10 @@ func executeHandler(event *types.Event) error {
 			unitNames = append(unitNames, unit.Name)
 		}
 	} else {
-		log.Panicf("Use units as-is")
+		log.Printf("Use unit names as-is")
+		for _, unit := range plugin.UnitPatterns {
+			unitNames = append(unitNames, unit)
+		}
 	}
 
 	var wg sync.WaitGroup
@@ -278,6 +281,7 @@ func executeHandler(event *types.Event) error {
 			if err2 != nil {
 				log.Printf("%s: Action error: %v", unitName, err2)
 				errors <- err2
+				return
 			}
 
 			result := <-resultCh
