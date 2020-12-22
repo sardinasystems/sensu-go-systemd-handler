@@ -19,6 +19,8 @@ type Config struct {
 	Action       string
 	SSHUser      string
 	SSHPort      int
+	BackoffMin   string
+	BackoffMax   string
 	Backoff      backoff.Config
 	DBusSocket   string
 }
@@ -70,15 +72,15 @@ var (
 			Path:     "ssh_min_delay",
 			Argument: "ssh-min-delay",
 			Usage:    "Minimum re-connection attempt delay",
-			Value:    &plugin.Backoff.Min,
-			Default:  250 * time.Milliseconds,
+			Value:    &plugin.BackoffMin,
+			Default:  "250ms",
 		},
 		{
 			Path:     "ssh_max_delay",
 			Argument: "ssh-max-delay",
 			Usage:    "Maximum re-connection attempt delay",
-			Value:    &plugin.Backoff.Max,
-			Default:  10 * time.Seconds,
+			Value:    &plugin.BackoffMax,
+			Default:  "10s",
 		},
 		{
 			Path:     "ssh_max_attempts",
@@ -114,12 +116,22 @@ func stringsContains(sl []string, s string) bool {
 
 func checkArgs(_ *types.Event) error {
 	allowedActions := []string{"start", "stop", "restart", "reload"}
+	var err error
 
 	if len(plugin.UnitPatterns) == 0 {
 		return fmt.Errorf("--unit or SYSTEMD_UNIT environment variable is required")
 	}
 	if !stringsContains(allowedActions, plugin.Action) {
 		return fmt.Errorf("--action must be one of %v, but it is: %v", allowedActions, plugin.Action)
+	}
+
+	plugin.Backoff.Min, err = time.ParseDuration(plugin.BackoffMin)
+	if err != nil {
+		return fmt.Errorf("Duration parse error: %w", err)
+	}
+	plugin.Backoff.Max, err = time.ParseDuration(plugin.BackoffMax)
+	if err != nil {
+		return fmt.Errorf("Duration parse error: %w", err)
 	}
 
 	return nil
