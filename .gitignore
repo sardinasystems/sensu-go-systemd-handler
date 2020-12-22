@@ -19,4 +19,5 @@ vendor/
 # deploy
 bonsai/
 dist/
-sensu-go-systemd-check
+sensu-go-systemd-handler
+event.json

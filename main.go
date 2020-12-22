@@ -1,15 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/sensu-community/sensu-plugin-sdk/sensu"
 	"github.com/sensu/sensu-go/types"
 
 	"github.com/sgreben/sshtunnel/backoff"
-	//"github.com/sgreben/sshtunnel/exec"
+	sshtunnel "github.com/sgreben/sshtunnel/exec"
+
+	"github.com/sardinasystems/sensu-go-systemd-handler/service"
 )
 
 // Config represents the handler plugin config.
@@ -17,6 +21,7 @@ type Config struct {
 	sensu.PluginConfig
 	UnitPatterns []string
 	Action       string
+	SSHHost      string
 	SSHUser      string
 	SSHPort      int
 	BackoffMin   string
@@ -51,6 +56,14 @@ var (
 			Usage:     "Action to perform: start, stop, restart, reload",
 			Value:     &plugin.Action,
 			Default:   "restart",
+		},
+		{
+			Path:      "ssh_host",
+			Argument:  "ssh-host",
+			Shorthand: "H",
+			Usage:     "SSH host (default: entity.hostname)",
+			Value:     &plugin.SSHHost,
+			Default:   "",
 		},
 		{
 			Path:      "ssh_user",
@@ -138,7 +151,31 @@ func checkArgs(_ *types.Event) error {
 }
 
 func executeHandler(event *types.Event) error {
-	log.Println("executing handler with --unit", plugin.UnitPatterns)
+	tunnelConfig := sshtunnel.Config{
+		User:    plugin.SSHUser,
+		SSHHost: plugin.SSHHost,
+		SSHPort: strconv.Itoa(plugin.SSHPort),
+		Backoff: plugin.Backoff,
+	}
+
+	if tunnelConfig.SSHHost == "" {
+		tunnelConfig.SSHHost = event.Entity.System.Hostname
+	}
+
+	log.Printf("Connecting ssh tunnel to: %s:%s", tunnelConfig.SSHHost, tunnelConfig.SSHPort)
+
+	stun, err := service.NewDBusTunnel(context.Background(), tunnelConfig, plugin.DBusSocket)
+	if err != nil {
+		return fmt.Errorf("SSH Tunnel error: %w", err)
+	}
+	defer stun.Close()
+
+	conn, err := stun.New()
+	if err != nil {
+		return fmt.Errorf("D-BUS error: %w", err)
+	}
+
+	_ = conn
 
 	return nil
 }
