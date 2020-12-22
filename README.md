@@ -29,6 +29,12 @@ sensu-go-systemd-handler
 
 ## Usage examples
 
+```
+sensu-go-systemd-handler -s nginx.service -a reload
+sensu-go-systemd-handler -s nginx.service -M fail
+sensu-go-systemd-handler -m -s nginx*
+```
+
 ## Configuration
 
 ### Asset registration
@@ -53,10 +59,10 @@ metadata:
   name: sensu-go-systemd-handler
   namespace: default
 spec:
-  command: sensu-go-systemd-handler --example example_arg
+  command: sensu-go-systemd-handler
   type: pipe
   runtime_assets:
-  - {{ .GithubUser}}/sensu-go-systemd-handler
+  - sensu-go-systemd-handler
 ```
 
 #### Proxy Support
@@ -80,7 +86,7 @@ type: CheckConfig
 api_version: core/v2
 metadata:
   annotations:
-    sensu.io/plugins/sensu-go-systemd-handler/config/example-argument: "Example change"
+    sensu.io/plugins/sensu-go-systemd-handler/config/unit: "nginx.service"
 [...]
 ```
 
