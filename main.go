@@ -4,17 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strconv"
 	"sync"
-	"time"
 
 	"github.com/coreos/go-systemd/v22/dbus"
 	"github.com/sensu-community/sensu-plugin-sdk/sensu"
 	"github.com/sensu/sensu-go/types"
 	"go.uber.org/multierr"
-
-	"github.com/sgreben/sshtunnel/backoff"
-	sshtunnel "github.com/sgreben/sshtunnel/exec"
 
 	"github.com/sardinasystems/sensu-go-systemd-handler/service"
 )
@@ -26,13 +21,7 @@ type Config struct {
 	MatchUnits   bool
 	Action       string
 	Mode         string
-	SSHHost      string
-	SSHUser      string
-	SSHPort      int
-	BackoffMin   string
-	BackoffMax   string
-	Backoff      backoff.Config
-	DBusSocket   string
+	Tun          service.DBusTunnelConfig
 }
 
 var (
@@ -84,7 +73,7 @@ var (
 			Argument:  "ssh-host",
 			Shorthand: "H",
 			Usage:     "SSH host (default: entity.hostname)",
-			Value:     &plugin.SSHHost,
+			Value:     &plugin.Tun.SSHHost,
 			Default:   "",
 		},
 		{
@@ -92,7 +81,7 @@ var (
 			Argument:  "ssh-user",
 			Shorthand: "u",
 			Usage:     "SSH User",
-			Value:     &plugin.SSHUser,
+			Value:     &plugin.Tun.User,
 			Default:   "root",
 		},
 		{
@@ -100,35 +89,14 @@ var (
 			Argument:  "ssh-port",
 			Shorthand: "p",
 			Usage:     "SSH Port",
-			Value:     &plugin.SSHPort,
+			Value:     &plugin.Tun.SSHPort,
 			Default:   22,
-		},
-		{
-			Path:     "ssh_min_delay",
-			Argument: "ssh-min-delay",
-			Usage:    "Minimum re-connection attempt delay",
-			Value:    &plugin.BackoffMin,
-			Default:  "250ms",
-		},
-		{
-			Path:     "ssh_max_delay",
-			Argument: "ssh-max-delay",
-			Usage:    "Maximum re-connection attempt delay",
-			Value:    &plugin.BackoffMax,
-			Default:  "10s",
-		},
-		{
-			Path:     "ssh_max_attempts",
-			Argument: "ssh-max-attempts",
-			Usage:    "Maximum number of re-connection attempts",
-			Value:    &plugin.Backoff.MaxAttempts,
-			Default:  3,
 		},
 		{
 			Path:     "dbus_socket",
 			Argument: "dbus-socket",
 			Usage:    "Remote D-BUS socket path",
-			Value:    &plugin.DBusSocket,
+			Value:    &plugin.Tun.RemoteSocket,
 			Default:  "/var/run/systemd/private",
 		},
 	}
@@ -182,7 +150,6 @@ func getActionFunc(conn *dbus.Conn) (actionFunc, error) {
 func checkArgs(_ *types.Event) error {
 	allowedActions := []string{"start", "stop", "restart", "reload", "try-restart", "reload-or-restart", "reload-or-try-restart"}
 	allowedModes := []string{"replace", "fail", "isolate", "ignore-dependencies", "ignore-requirements"}
-	var err error
 
 	if len(plugin.UnitPatterns) == 0 {
 		return fmt.Errorf("--unit or SYSTEMD_UNIT environment variable is required")
@@ -194,34 +161,18 @@ func checkArgs(_ *types.Event) error {
 		return fmt.Errorf("--mode must be one of %v, but it is: %v", allowedModes, plugin.Mode)
 	}
 
-	plugin.Backoff.Min, err = time.ParseDuration(plugin.BackoffMin)
-	if err != nil {
-		return fmt.Errorf("Duration parse error: %w", err)
-	}
-	plugin.Backoff.Max, err = time.ParseDuration(plugin.BackoffMax)
-	if err != nil {
-		return fmt.Errorf("Duration parse error: %w", err)
-	}
-
 	return nil
 }
 
 func executeHandler(event *types.Event) error {
-	tunnelConfig := sshtunnel.Config{
-		User:    plugin.SSHUser,
-		SSHHost: plugin.SSHHost,
-		SSHPort: strconv.Itoa(plugin.SSHPort),
-		Backoff: plugin.Backoff,
-	}
-
-	if tunnelConfig.SSHHost == "" {
-		tunnelConfig.SSHHost = event.Entity.System.Hostname
-	}
-
 	ctx := context.Background()
 
-	log.Printf("Connecting ssh tunnel to: %s:%s", tunnelConfig.SSHHost, tunnelConfig.SSHPort)
-	stun, err := service.NewDBusTunnel(ctx, tunnelConfig, plugin.DBusSocket)
+	if plugin.Tun.SSHHost == "" {
+		plugin.Tun.SSHHost = event.Entity.System.Hostname
+	}
+
+	log.Printf("Connecting ssh tunnel to: %s:%d", plugin.Tun.SSHHost, plugin.Tun.SSHPort)
+	stun, err := service.NewDBusTunnel(ctx, plugin.Tun)
 	if err != nil {
 		return fmt.Errorf("SSH Tunnel error: %w", err)
 	}
@@ -237,12 +188,8 @@ func executeHandler(event *types.Event) error {
 	if plugin.MatchUnits {
 		log.Printf("Matching unit patterns...")
 
-		rawConn, err := stun.NewDBusConn()
-		if err != nil {
-			return fmt.Errorf("failed to make raw d-bus connection: %w", err)
-		}
-
-		unitFetcher, err := service.InstrospectForUnitMethods(rawConn)
+		// NOTE(vermakov): use local systemd to introspect remote methods
+		unitFetcher, err := service.InstrospectForUnitMethods(nil)
 		if err != nil {
 			return fmt.Errorf("could not introspect systemd dbus: %w", err)
 		}
@@ -265,7 +212,7 @@ func executeHandler(event *types.Event) error {
 	var wg sync.WaitGroup
 	errors := make(chan error, len(unitNames))
 	for idx, unitName := range unitNames {
-		log.Printf("%s: Triggering %s action (%d/%d)", unitName, plugin.Action, idx, len(unitNames))
+		log.Printf("%s: Triggering %s action (%d/%d)", unitName, plugin.Action, idx+1, len(unitNames))
 		wg.Add(1)
 		go func(unitName string) {
 			defer wg.Done()

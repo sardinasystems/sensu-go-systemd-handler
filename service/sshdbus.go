@@ -3,54 +3,62 @@ package service
 import (
 	"context"
 	"fmt"
-	"log"
-	"net"
+	"io/ioutil"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"syscall"
+	"time"
 
 	systemdDBus "github.com/coreos/go-systemd/v22/dbus"
+	"github.com/fsnotify/fsnotify"
 	"github.com/godbus/dbus/v5"
-	sshtunnel "github.com/sgreben/sshtunnel/exec"
+	"go.uber.org/multierr"
 )
+
+// DBusTunnelConfig stores config
+type DBusTunnelConfig struct {
+	User         string
+	SSHHost      string
+	SSHPort      int
+	RemoteSocket string
+}
 
 // DBusTunnel makes a tunnel socket->local-tcp
 type DBusTunnel struct {
-	ctx      context.Context
-	ctxCf    context.CancelFunc
-	listener net.Listener
-	laddr    net.Addr
+	ctx    context.Context
+	ctxCf  context.CancelFunc
+	cfg    DBusTunnelConfig
+	cmd    *exec.Cmd
+	tmpdir string
+	lsock  string
 }
 
 // NewDBusTunnel creates dbus socket tunnel
-func NewDBusTunnel(ctx context.Context, tunnelConfig sshtunnel.Config, remoteSocket string) (*DBusTunnel, error) {
-	// we're not going to support anything else
-	tunnelConfig.CommandTemplate = sshtunnel.CommandTemplateOpenSSH
-
-	laddr, err := getFreeLocalAddr()
+func NewDBusTunnel(ctx context.Context, tunnelConfig DBusTunnelConfig) (*DBusTunnel, error) {
+	tempDir, err := ioutil.TempDir("", "ssh-tun*")
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve local addr: %w", err)
+		return nil, err
 	}
+
+	lsock := filepath.Join(tempDir, "dbus.sock")
 
 	ctx, cf := context.WithCancel(ctx)
 
 	t := &DBusTunnel{
-		ctx:   ctx,
-		ctxCf: cf,
-		laddr: laddr,
+		ctx:    ctx,
+		ctxCf:  cf,
+		cfg:    tunnelConfig,
+		tmpdir: tempDir,
+		lsock:  lsock,
 	}
 
-	listener, errCh, err := sshtunnel.ListenContext(ctx, t.laddr, remoteSocket, &tunnelConfig)
+	err = t.run()
 	if err != nil {
-		return nil, fmt.Errorf("tunnel failed to listen: %w", err)
+		t.Close()
+		return nil, err
 	}
-	go func() {
-		err, ok := <-errCh
-		if !ok {
-			return
-		}
 
-		log.Fatalf("tunnel connection failed: %v", err)
-	}()
-
-	t.listener = listener
 	return t, nil
 }
 
@@ -64,12 +72,7 @@ func (t *DBusTunnel) New() (*systemdDBus.Conn, error) {
 
 // NewDBusConn makes raw d-bus connection to the remote systemd
 func (t *DBusTunnel) NewDBusConn(opts ...dbus.ConnOption) (*dbus.Conn, error) {
-	host, port, err := net.SplitHostPort(t.laddr.String())
-	if err != nil {
-		return nil, fmt.Errorf("split laddr error: %w", err)
-	}
-
-	return dbus.Dial(fmt.Sprintf("tcp:host=%s,port=%s", host, port), opts...)
+	return dbus.Dial(fmt.Sprintf("unix:path=%s", t.lsock), opts...)
 }
 
 // copy from systemd/v22/dbus
@@ -94,25 +97,71 @@ func dbusAuthConnection(ctx context.Context, createBus func(opts ...dbus.ConnOpt
 	return conn, nil
 }
 
-func getFreeLocalAddr() (net.Addr, error) {
-	laddr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, err
+// run starts ssh program
+func (t *DBusTunnel) run() error {
+	args := []string{
+		//"ssh",
+		"-nNT",
+		"-L",
+		fmt.Sprintf("%s:%s", t.lsock, t.cfg.RemoteSocket),
+		"-p",
+		fmt.Sprintf("%d", t.cfg.SSHPort),
+		fmt.Sprintf("%s@%s", t.cfg.User, t.cfg.SSHHost),
 	}
 
-	l, err := net.ListenTCP("tcp", laddr)
-	if err != nil {
-		return nil, err
+	cmd := exec.CommandContext(t.ctx, "ssh", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Pdeathsig: syscall.SIGTERM,
 	}
-	defer l.Close()
 
-	return l.Addr(), nil
+	err := cmd.Start()
+	if err != nil {
+		return fmt.Errorf("command error: %w", err)
+	}
+
+	return t.waitForSocket()
+}
+
+func (t *DBusTunnel) waitForSocket() error {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("watcher new error: %w", err)
+	}
+	defer watcher.Close()
+
+	err = watcher.Add(t.tmpdir)
+	if err != nil {
+		return fmt.Errorf("watcher add error: %w", err)
+	}
+
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+
+	for {
+		select {
+		case _ = <-watcher.Events:
+			return nil
+
+		case err := <-watcher.Errors:
+			return fmt.Errorf("inotify error: %w", err)
+
+		case <-timer.C:
+			return fmt.Errorf("connection timeout")
+		}
+	}
 }
 
 // Close terminates ssh tunnel
 func (t *DBusTunnel) Close() error {
-	err := t.listener.Close()
+	var err error
+
+	if t.cmd != nil {
+		err = multierr.Append(err, t.cmd.Process.Kill())
+	}
+
 	t.ctxCf()
+
+	err = multierr.Append(err, os.RemoveAll(t.tmpdir))
 
 	return err
 }
