@@ -93,6 +93,12 @@ var (
 			Default:   22,
 		},
 		{
+			Path:     "ssh_verbose",
+			Argument: "ssh-verbose",
+			Usage:    "SSH Verbose mode (for debugging)",
+			Value:    &plugin.Tun.SSHVerbose,
+		},
+		{
 			Path:     "dbus_socket",
 			Argument: "dbus-socket",
 			Usage:    "Remote D-BUS socket path",

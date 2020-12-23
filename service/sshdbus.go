@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,6 +24,7 @@ type DBusTunnelConfig struct {
 	SSHHost      string
 	SSHPort      int
 	RemoteSocket string
+	SSHVerbose   bool
 }
 
 // DBusTunnel makes a tunnel socket->local-tcp
@@ -109,9 +112,33 @@ func (t *DBusTunnel) run() error {
 		fmt.Sprintf("%s@%s", t.cfg.User, t.cfg.SSHHost),
 	}
 
+	for _, opts := range []string{
+		"ForwardAgent=yes",
+		"ControlMaster=auto",
+		"ControlPersist=60s",
+		"UserKnownHostsFile=/dev/null",
+		"StrictHostKeyChecking=no",
+		"ConnectTimeout=6",
+		"ConnectionAttempts=30",
+		"PreferredAuthentications=publickey",
+	} {
+		args = append(args, "-o")
+		args = append(args, opts)
+	}
+
+	if t.cfg.SSHVerbose {
+		args = append(args, "-v")
+	}
+
 	cmd := exec.CommandContext(t.ctx, "ssh", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Pdeathsig: syscall.SIGTERM,
+	}
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if t.cfg.SSHVerbose {
+		log.Printf("Starting: ssh %s", strings.Join(args, " "))
 	}
 
 	err := cmd.Start()
