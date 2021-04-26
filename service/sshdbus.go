@@ -166,7 +166,7 @@ func (t *DBusTunnel) waitForSocket() error {
 
 	for {
 		select {
-		case _ = <-watcher.Events:
+		case <-watcher.Events:
 			return nil
 
 		case err := <-watcher.Errors:

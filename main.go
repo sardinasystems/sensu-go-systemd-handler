@@ -210,9 +210,7 @@ func executeHandler(event *types.Event) error {
 		}
 	} else {
 		log.Printf("Use unit names as-is")
-		for _, unit := range plugin.UnitPatterns {
-			unitNames = append(unitNames, unit)
-		}
+		unitNames = append(unitNames, plugin.UnitPatterns...)
 	}
 
 	var wg sync.WaitGroup
