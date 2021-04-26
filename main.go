@@ -7,8 +7,8 @@ import (
 	"sync"
 
 	"github.com/coreos/go-systemd/v22/dbus"
-	"github.com/sensu-community/sensu-plugin-sdk/sensu"
 	"github.com/sensu/sensu-go/types"
+	"github.com/sensu/sensu-plugin-sdk/sensu"
 	"go.uber.org/multierr"
 
 	"github.com/sardinasystems/sensu-go-systemd-handler/service"
