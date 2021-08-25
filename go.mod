@@ -4,7 +4,7 @@ go 1.17
 
 require (
 	github.com/coreos/go-systemd/v22 v22.3.2
-	github.com/fsnotify/fsnotify v1.5.0
+	github.com/fsnotify/fsnotify v1.5.1
 	github.com/godbus/dbus/v5 v5.0.4
 	github.com/sensu/sensu-go/types v0.7.0
 	github.com/sensu/sensu-plugin-sdk v0.14.0
