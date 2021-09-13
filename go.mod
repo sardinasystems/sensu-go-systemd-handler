@@ -7,7 +7,7 @@ require (
 	github.com/fsnotify/fsnotify v1.5.1
 	github.com/godbus/dbus/v5 v5.0.5
 	github.com/sensu/sensu-go/types v0.7.1
-	github.com/sensu/sensu-plugin-sdk v0.14.0
+	github.com/sensu/sensu-plugin-sdk v0.14.1
 	go.uber.org/multierr v1.7.0
 )
 
