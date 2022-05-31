@@ -25,6 +25,9 @@ type Config struct {
 }
 
 var (
+	allowedActions = []string{"start", "stop", "restart", "reload", "try-restart", "reload-or-restart", "reload-or-try-restart"}
+	allowedModes   = []string{"replace", "fail", "isolate", "ignore-dependencies", "ignore-requirements"}
+
 	plugin = Config{
 		PluginConfig: sensu.PluginConfig{
 			Name:     "sensu-go-systemd-handler",
@@ -33,8 +36,8 @@ var (
 		},
 	}
 
-	options = []*sensu.PluginConfigOption{
-		{
+	options = []sensu.ConfigOption{
+		&sensu.SlicePluginConfigOption[string]{
 			Path:      "unit",
 			Env:       "SYSTEMD_UNIT",
 			Argument:  "unit",
@@ -42,7 +45,7 @@ var (
 			Usage:     "Systemd unit(s) names/patterns to action",
 			Value:     &plugin.UnitPatterns,
 		},
-		{
+		&sensu.PluginConfigOption[bool]{
 			Path:      "match",
 			Env:       "SYSTEMD_MATCH_UNITS",
 			Argument:  "match",
@@ -50,7 +53,7 @@ var (
 			Usage:     "Match unit(s) patterns",
 			Value:     &plugin.MatchUnits,
 		},
-		{
+		&sensu.PluginConfigOption[string]{
 			Path:      "action",
 			Env:       "SYSTEMD_ACTION",
 			Argument:  "action",
@@ -58,8 +61,9 @@ var (
 			Usage:     "Action to perform: start, stop, restart, reload",
 			Value:     &plugin.Action,
 			Default:   "restart",
+			Allow:     allowedActions,
 		},
-		{
+		&sensu.PluginConfigOption[string]{
 			Path:      "mode",
 			Env:       "SYSTEMD_MODE",
 			Argument:  "mode",
@@ -67,8 +71,9 @@ var (
 			Usage:     "Action mode: replace, fail, isolate, ignore-dependencies, ignore-requirements",
 			Value:     &plugin.Mode,
 			Default:   "replace",
+			Allow:     allowedModes,
 		},
-		{
+		&sensu.PluginConfigOption[string]{
 			Path:      "ssh_host",
 			Argument:  "ssh-host",
 			Shorthand: "H",
@@ -76,7 +81,7 @@ var (
 			Value:     &plugin.Tun.SSHHost,
 			Default:   "",
 		},
-		{
+		&sensu.PluginConfigOption[string]{
 			Path:      "ssh_user",
 			Argument:  "ssh-user",
 			Shorthand: "u",
@@ -84,7 +89,7 @@ var (
 			Value:     &plugin.Tun.User,
 			Default:   "root",
 		},
-		{
+		&sensu.PluginConfigOption[int]{
 			Path:      "ssh_port",
 			Argument:  "ssh-port",
 			Shorthand: "p",
@@ -92,13 +97,13 @@ var (
 			Value:     &plugin.Tun.SSHPort,
 			Default:   22,
 		},
-		{
+		&sensu.PluginConfigOption[bool]{
 			Path:     "ssh_verbose",
 			Argument: "ssh-verbose",
 			Usage:    "SSH Verbose mode (for debugging)",
 			Value:    &plugin.Tun.SSHVerbose,
 		},
-		{
+		&sensu.PluginConfigOption[string]{
 			Path:     "dbus_socket",
 			Argument: "dbus-socket",
 			Usage:    "Remote D-BUS socket path",
@@ -123,30 +128,30 @@ func stringsContains(sl []string, s string) bool {
 	return false
 }
 
-type actionFunc func(name string, mode string, ch chan<- string) (int, error)
+type actionFunc func(ctx context.Context, name string, mode string, ch chan<- string) (int, error)
 
 func getActionFunc(conn *dbus.Conn) (actionFunc, error) {
 	switch plugin.Action {
 	case "start":
-		return conn.StartUnit, nil
+		return conn.StartUnitContext, nil
 
 	case "stop":
-		return conn.StopUnit, nil
+		return conn.StopUnitContext, nil
 
 	case "restart":
-		return conn.RestartUnit, nil
+		return conn.RestartUnitContext, nil
 
 	case "reload":
-		return conn.ReloadUnit, nil
+		return conn.ReloadUnitContext, nil
 
 	case "try-restart":
-		return conn.TryRestartUnit, nil
+		return conn.TryRestartUnitContext, nil
 
 	case "reload-or-restart":
-		return conn.ReloadOrRestartUnit, nil
+		return conn.ReloadOrRestartUnitContext, nil
 
 	case "reload-or-try-restart":
-		return conn.ReloadOrTryRestartUnit, nil
+		return conn.ReloadOrTryRestartUnitContext, nil
 
 	default:
 		return nil, fmt.Errorf("unsupported action: %s", plugin.Action)
@@ -200,7 +205,7 @@ func executeHandler(event *types.Event) error {
 			return fmt.Errorf("could not introspect systemd dbus: %w", err)
 		}
 
-		unitStats, err := unitFetcher(conn, nil, plugin.UnitPatterns)
+		unitStats, err := unitFetcher(ctx, conn, nil, plugin.UnitPatterns)
 		if err != nil {
 			return fmt.Errorf("list units error: %w", err)
 		}
@@ -228,7 +233,7 @@ func executeHandler(event *types.Event) error {
 
 			resultCh := make(chan string)
 
-			_, err2 = af(unitName, plugin.Mode, resultCh)
+			_, err2 = af(ctx, unitName, plugin.Mode, resultCh)
 			if err2 != nil {
 				log.Printf("%s: Action error: %v", unitName, err2)
 				errors <- err2
