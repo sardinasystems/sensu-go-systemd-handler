@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -39,7 +38,7 @@ type DBusTunnel struct {
 
 // NewDBusTunnel creates dbus socket tunnel
 func NewDBusTunnel(ctx context.Context, tunnelConfig DBusTunnelConfig) (*DBusTunnel, error) {
-	tempDir, err := ioutil.TempDir("", "ssh-tun*")
+	tempDir, err := os.MkdirTemp("", "ssh-tun*")
 	if err != nil {
 		return nil, err
 	}
@@ -122,8 +121,7 @@ func (t *DBusTunnel) run() error {
 		"ConnectionAttempts=30",
 		"PreferredAuthentications=publickey",
 	} {
-		args = append(args, "-o")
-		args = append(args, opts)
+		args = append(args, "-o", opts)
 	}
 
 	if t.cfg.SSHVerbose {

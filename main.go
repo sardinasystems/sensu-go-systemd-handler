@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"github.com/coreos/go-systemd/v22/dbus"
-	"github.com/sensu/sensu-go/types"
+	corev2 "github.com/sensu/sensu-go/api/core/v2"
 	"github.com/sensu/sensu-plugin-sdk/sensu"
 	"go.uber.org/multierr"
 
@@ -158,7 +158,7 @@ func getActionFunc(conn *dbus.Conn) (actionFunc, error) {
 	}
 }
 
-func checkArgs(_ *types.Event) error {
+func checkArgs(_ *corev2.Event) error {
 	allowedActions := []string{"start", "stop", "restart", "reload", "try-restart", "reload-or-restart", "reload-or-try-restart"}
 	allowedModes := []string{"replace", "fail", "isolate", "ignore-dependencies", "ignore-requirements"}
 
@@ -175,7 +175,7 @@ func checkArgs(_ *types.Event) error {
 	return nil
 }
 
-func executeHandler(event *types.Event) error {
+func executeHandler(event *corev2.Event) error {
 	ctx := context.Background()
 
 	if plugin.Tun.SSHHost == "" {
