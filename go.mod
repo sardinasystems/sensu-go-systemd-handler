@@ -6,7 +6,7 @@ require (
 	github.com/coreos/go-systemd/v22 v22.4.0
 	github.com/fsnotify/fsnotify v1.6.0
 	github.com/godbus/dbus/v5 v5.1.0
-	github.com/sensu/sensu-go/api/core/v2 v2.15.0
+	github.com/sensu/sensu-go/api/core/v2 v2.16.0
 	github.com/sensu/sensu-plugin-sdk v0.16.0
 	go.uber.org/multierr v1.8.0
 )
