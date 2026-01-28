@@ -3,7 +3,7 @@ module github.com/sardinasystems/sensu-go-systemd-handler
 go 1.23.6
 
 require (
-	github.com/coreos/go-systemd/v22 v22.5.0
+	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/godbus/dbus/v5 v5.1.0
 	github.com/sensu/core/v2 v2.20.0
